@@ -5,7 +5,7 @@ from database import get_db
 from datetime import datetime
 from oauth2 import get_current_user
 from sqlalchemy import func  # Add this line
-
+from typing import List
 
 router = APIRouter(
     prefix="/users",
@@ -30,29 +30,43 @@ def create_monthly_budget(
     db.refresh(db_budget)
     return db_budget
 
-
-@router.get("/monthly_budget", response_model=schemas.MonthlyBudgetResponse, status_code=status.HTTP_200_OK)
+@router.get("/monthly_budget", response_model=List[schemas.MonthlyBudgetResponse], status_code=status.HTTP_200_OK)
 def get_user_monthly_budget(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    monthly_budget = db.query(models.MonthlyBudget).filter(models.MonthlyBudget.user_id == current_user.id).first()
-    if not monthly_budget:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monthly budget not found")
+    year = 2024  # Hardcoded year
+
+    # Fetch monthly budgets for all months of the specified year
+    monthly_budgets = db.query(models.MonthlyBudget).filter(models.MonthlyBudget.user_id == current_user.id, models.MonthlyBudget.year == year).order_by(models.MonthlyBudget.month).all()
+
+    monthly_budget_responses = []
+
+    # Loop through each month of the year
+    for month in range(1, 13):
+        # Check if budget is set for the current month
+        monthly_budget = next((budget for budget in monthly_budgets if budget.month == month), None)
+        
+        # If budget is not set for the current month, set budget to 0
+        if not monthly_budget:
+            initial_budget = 0.0
+            budget_id = None
+        else:
+            total_category_budget = db.query(func.sum(models.Category.budget)).join(models.User).filter(models.User.id == current_user.id).scalar()
+            initial_budget = monthly_budget.budget + (total_category_budget or 0.0)
+            budget_id = monthly_budget.id
+
+        total_expenses = db.query(func.sum(models.Expense.amount)).join(models.User).filter(models.User.id == current_user.id).scalar() or 0.0
+        # If the initial_budget is 0, then the balance should also be 0
+        balance = initial_budget if initial_budget == 0 else (initial_budget - total_expenses)
+
+        monthly_budget_response = schemas.MonthlyBudgetResponse(
+            id=budget_id,
+            month=month,
+            year=year,
+            budget=initial_budget,
+            balance=balance
+        )
+        monthly_budget_responses.append(monthly_budget_response)
     
-    total_category_budget = db.query(func.sum(models.Category.budget)).join(models.User).filter(models.User.id == current_user.id).scalar()
-    initial_budget = monthly_budget.budget + (total_category_budget or 0.0)
-
-    total_expenses = db.query(func.sum(models.Expense.amount)).join(models.User).filter(models.User.id == current_user.id).scalar()
-    balance = initial_budget - (total_expenses or 0.0)
-
-    monthly_budget_response = schemas.MonthlyBudgetResponse(
-        id=monthly_budget.id,
-        month=monthly_budget.month,
-        year=monthly_budget.year,
-        budget=initial_budget,
-        balance=balance
-    )
-    return monthly_budget_response
-
-
+    return monthly_budget_responses

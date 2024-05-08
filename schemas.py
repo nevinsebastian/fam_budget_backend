@@ -39,6 +39,8 @@ class UserResponse(BaseModel):
 
 class CategoryBase(BaseModel):
     name: str
+    budget: float
+
 
 
 class CategoryCreate(CategoryBase):
@@ -117,7 +119,15 @@ class MonthlyBudgetBase(BaseModel):
 class MonthlyBudgetCreate(MonthlyBudgetBase):
     pass
 
+class MonthlyBudgetResponse(BaseModel):
+    id: Optional[int]
+    month: int
+    year: int
+    budget: float
+    balance: float
 
+    class Config:
+        orm_mode = True
 
 
 

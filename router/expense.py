@@ -18,7 +18,6 @@ router = APIRouter(
 @router.post("/categories", status_code=status.HTTP_201_CREATED)
 def create_category(
     category: schemas.CategoryCreate,
-    budget: float,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -26,10 +25,10 @@ def create_category(
     monthly_budget = db.query(models.MonthlyBudget).filter(models.MonthlyBudget.user_id == current_user.id).first()
     total_category_budget = db.query(func.sum(models.Category.budget)).filter(models.Category.user_id == current_user.id).scalar()
     
-    if monthly_budget and total_category_budget is not None and total_category_budget + budget > monthly_budget.budget:
+    if monthly_budget and total_category_budget is not None and total_category_budget + category.budget > monthly_budget.budget:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Total category budgets cannot exceed the user's monthly budget")
 
-    db_category = models.Category(name=category.name, budget=budget, user_id=current_user.id)
+    db_category = models.Category(name=category.name, budget=category.budget, user_id=current_user.id)
     db.add(db_category)
     db.commit()
     db.refresh(db_category)
@@ -134,4 +133,3 @@ def create_expense(
     db.refresh(db_expense)
 
     return db_expense
-

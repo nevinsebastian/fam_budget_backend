@@ -1,72 +1,72 @@
 from fastapi import status, HTTPException, Depends, APIRouter
 from sqlalchemy.orm import Session
-import models, schemas, utils
+import models, schemas
 from database import get_db
-from datetime import datetime
-from oauth2 import get_current_user
-from sqlalchemy import func  # Add this line
 from typing import List
+from oauth2 import get_current_user
 
 router = APIRouter(
-    prefix="/users",
-    tags=['Users']
+    prefix="/budgets",
+    tags=['Budgets']
 )
 
-@router.post("/set_budget", status_code=status.HTTP_200_OK)
-def create_monthly_budget(
-    budget: schemas.MonthlyBudgetCreate,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
-):
+@router.post("/create")
+def create_monthly_budget(budget_create: schemas.BudgetCreate, user_id: int = Depends(get_current_user), db: Session = Depends(get_db)):
+    existing_budget = db.query(models.Budget).filter(models.Budget.month == budget_create.month, models.Budget.user_id == user_id).first()
+    if existing_budget:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A budget already exists for this month")
 
-    # Check if the total budget for all categories exceeds the user's total budget
-    # total_category_budget = sum(cat.budget for cat in current_user.categories)
-    # if total_category_budget + budget.budget > current_user.balance:
-    #     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Total category budgets cannot exceed total budget")
-
-    db_budget = models.MonthlyBudget(**budget.dict(), user_id=current_user.id)
-    db.add(db_budget)
+    new_budget = models.Budget(month=budget_create.month, total_budget=budget_create.total_budget, user_id=user_id)
+    db.add(new_budget)
     db.commit()
-    db.refresh(db_budget)
-    return db_budget
+    db.refresh(new_budget)
+    return {"message": "Monthly budget created successfully", "budget_id": new_budget.id}
 
-@router.get("/monthly_budget", response_model=List[schemas.MonthlyBudgetResponse], status_code=status.HTTP_200_OK)
-def get_user_monthly_budget(
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
-):
-    year = 2024  # Hardcoded year
-
-    # Fetch monthly budgets for all months of the specified year
-    monthly_budgets = db.query(models.MonthlyBudget).filter(models.MonthlyBudget.user_id == current_user.id, models.MonthlyBudget.year == year).order_by(models.MonthlyBudget.month).all()
-
-    monthly_budget_responses = []
-
-    # Loop through each month of the year
-    for month in range(1, 13):
-        # Check if budget is set for the current month
-        monthly_budget = next((budget for budget in monthly_budgets if budget.month == month), None)
-        
-        # If budget is not set for the current month, set budget to 0
-        if not monthly_budget:
-            initial_budget = 0.0
-            budget_id = None
-        else:
-            total_category_budget = db.query(func.sum(models.Category.budget)).join(models.User).filter(models.User.id == current_user.id).scalar()
-            initial_budget = monthly_budget.budget + (total_category_budget or 0.0)
-            budget_id = monthly_budget.id
-
-        total_expenses = db.query(func.sum(models.Expense.amount)).join(models.User).filter(models.User.id == current_user.id).scalar() or 0.0
-        # If the initial_budget is 0, then the balance should also be 0
-        balance = initial_budget if initial_budget == 0 else (initial_budget - total_expenses)
-
-        monthly_budget_response = schemas.MonthlyBudgetResponse(
-            id=budget_id,
-            month=month,
-            year=year,
-            budget=initial_budget,
-            balance=balance
-        )
-        monthly_budget_responses.append(monthly_budget_response)
+@router.post("/category/{budget_id}")
+def add_category_to_budget(budget_id: int, category_create: schemas.CategoryCreate, user_id: int = Depends(get_current_user), db: Session = Depends(get_db)):
+    db_budget = db.query(models.Budget).filter(models.Budget.id == budget_id, models.Budget.user_id == user_id).first()
+    if not db_budget:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Budget not found")
     
-    return monthly_budget_responses
+    new_category = models.Category(name=category_create.name, amount=category_create.amount, budget_id=budget_id, user_id=user_id)
+    db.add(new_category)
+    db.commit()
+    db.refresh(new_category)
+    return {"message": "Category added successfully", "category_id": new_category.id}
+
+@router.post("/expenditure/{category_id}")
+def add_expenditure_to_category(category_id: int, expenditure_create: schemas.ExpenditureCreate, user_id: int = Depends(get_current_user), db: Session = Depends(get_db)):
+    db_category = db.query(models.Category).filter(models.Category.id == category_id, models.Category.user_id == user_id).first()
+    if not db_category:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+    
+    db_budget = db_category.budget
+    if expenditure_create.amount > db_category.amount:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Expenditure amount exceeds category budget")
+    
+    new_expense = models.Expense(amount=expenditure_create.amount, category_id=category_id, budget_id=db_category.budget_id, user_id=user_id)
+    db.add(new_expense)
+    db.commit()
+    
+    # Update category and budget balances
+    db_category.amount -= expenditure_create.amount
+    db_budget.total_budget -= expenditure_create.amount
+    db.commit()
+    
+    return {"message": "Expenditure added successfully"}
+
+@router.get("/category/balance/{category_id}")
+def get_category_balance(category_id: int, user_id: int = Depends(get_current_user), db: Session = Depends(get_db)):
+    db_category = db.query(models.Category).filter(models.Category.id == category_id, models.Category.user_id == user_id).first()
+    if not db_category:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+    
+    return {"category_balance": db_category.amount}
+
+@router.get("/budget/balance/{budget_id}")
+def get_budget_balance(budget_id: int, user_id: int = Depends(get_current_user), db: Session = Depends(get_db)):
+    db_budget = db.query(models.Budget).filter(models.Budget.id == budget_id, models.Budget.user_id == user_id).first()
+    if not db_budget:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Budget not found")
+    
+    return {"budget_balance": db_budget.total_budget}

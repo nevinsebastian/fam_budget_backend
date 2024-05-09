@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from dotenv import load_dotenv
-from router import user, userauth, budget,expense
+from router import user, userauth, budget
 from database import engine
 import models
 
@@ -40,7 +40,6 @@ models.Base.metadata.create_all(bind=engine)
 app.include_router(user.router)
 app.include_router(userauth.router)
 app.include_router(budget.router)
-app.include_router(expense.router)
 
 
 
